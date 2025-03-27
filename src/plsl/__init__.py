@@ -4,7 +4,7 @@ import os
 import signal
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter, QLabel
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QScreen
 from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
@@ -16,15 +16,15 @@ from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
 # yes | while read i; do python src/plsl/__init__.py; done
 
 REFRESH_EVERY_MS = 20
-BUFFER_DURATION_MS = 2000
-FAKE_FS_FOR_EVENTS = 100
+BUFFER_DURATION_MS = 4000
+PSEUDO_SRATE_FOR_EVENTS = 1000
 
 
 def get_lsl_stream_desc(stream: StreamInfo, channel_id: int):
     return f"{stream.name()}({stream.hostname()}) [{stream.type()}] channel {channel_id}"
 
-class StreamChannelGUI():
-    def __init__(self, stream: StreamInfo, channel_id: int):
+class StreamChannel():
+    def __init__(self, lsl_stream: StreamInfo, channel_id: int):
         self.channel_id = channel_id
 
 
@@ -50,139 +50,157 @@ class StreamChannelGUI():
         #	/// For binary signals or other coded data. Not recommended for encoding string data.
         #	cf_int8 = 6,
         #	/// For now only for future compatibility. Support for this type is not yet exposed in all
-        #	/// languages. Also, some builds of liblsl will not be able to send or receive data of this
-        #	/// type.
+        #	/// languages. Also, some builds of liblsl will not be able to send or receive data of this #	/// type.
         #	cf_int64 = 7,
         #	/// Can not be transmitted.
         #	cf_undefined = 0
         #};
 
         self.has_srate = True
-        if stream.channel_format() == 3:
+        if lsl_stream.channel_format() == 3:
             print("got a variable rate stream")
             self.has_srate = False
         
-        self.graph_widget_ts = pg.PlotWidget()
-        self.graph_widget_fft = pg.PlotWidget()
+        self.ui_plot_widget_ts = pg.PlotWidget()
+        self.ui_plot_widget_fft = pg.PlotWidget()
 
-        self.graph_widget_ts.setTitle(get_lsl_stream_desc(stream, channel_id))
-        self.graph_widget_ts.setLabel("left", "Amplitude")
-        self.graph_widget_ts.setLabel("bottom", "Time (s)")
+        self.ui_plot_widget_ts.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
+        self.ui_plot_widget_ts.setLabel("left", "Amplitude")
+        self.ui_plot_widget_ts.setLabel("bottom", "Time (s)")
 
-        self.graph_widget_fft.setTitle(get_lsl_stream_desc(stream, channel_id))
-        self.graph_widget_fft.setLabel("left", "Amplitude")
-        self.graph_widget_fft.setLabel("bottom", "Frequency (Hz)")
+        self.ui_plot_widget_fft.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
+        self.ui_plot_widget_fft.setLabel("left", "Amplitude")
+        self.ui_plot_widget_fft.setLabel("bottom", "Frequency (Hz)")
 
-        self.curve_ts = self.graph_widget_ts.plot()
-        self.curve_fft = self.graph_widget_fft.plot()
+        self.ui_curve_ts = self.ui_plot_widget_ts.plot()
+        self.ui_curve_fft = self.ui_plot_widget_fft.plot()
 
-        self.splitter = QSplitter(Qt.Horizontal)
-        self.splitter.addWidget(self.graph_widget_ts)
-        self.splitter.addWidget(self.graph_widget_fft)
-
-        self.fs = stream.nominal_srate()
+        self.fs = lsl_stream.nominal_srate()
 
         fs = self.fs
         if fs == 0:
-            fs = FAKE_FS_FOR_EVENTS
+            fs = PSEUDO_SRATE_FOR_EVENTS
 
         self.buffer_size = int(fs * BUFFER_DURATION_MS / 1000)
         self.data_buffer = np.zeros(self.buffer_size)
 
         self.samples = []
 
+        self.ui_splitter = QSplitter(Qt.Horizontal)
+        self.ui_splitter.addWidget(self.ui_plot_widget_ts)
+        self.ui_splitter.addWidget(self.ui_plot_widget_fft)
 
-class StreamGUI():
-    def __init__(self, stream: StreamInfo, layout):
-        self.channel_count = stream.channel_count()
-        self.stream = stream
-        self.inlet = StreamInlet(stream)
-        self.stream_channel_guis: List[StreamChannelGUI] = []
+
+
+class Stream():
+    def __init__(self, lsl_stream: StreamInfo, ui_layout: QVBoxLayout):
+        self.channel_count = lsl_stream.channel_count()
+        self.lsl_stream = lsl_stream
+        self.lsl_inlet = StreamInlet(lsl_stream)
+        self.channels: List[StreamChannel] = []
 
         for i in range(self.channel_count):
-            stream_channel_gui = StreamChannelGUI(stream, i)
-            self.stream_channel_guis.append(stream_channel_gui)
-            layout.addWidget(stream_channel_gui.splitter)
+            channel = StreamChannel(lsl_stream, i)
+            self.channels.append(channel)
+            ui_layout.addWidget(channel.ui_splitter)
 
-class MyWindow(QMainWindow):
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.stream_guis: List[StreamGUI] = []
+        self.streams: List[Stream] = []
 
         main_widget = QWidget(self)
-        layout = QVBoxLayout(main_widget)
+        main_layout = QVBoxLayout(main_widget)
 
         print("Looking for LSL stream...")
         lsl_streams = resolve_streams()
         if len(lsl_streams) == 0:
-            print("No stream available")
+            print("No LSL stream available")
             sys.exit(1)
 
         print(lsl_streams)
         for lsl_stream in lsl_streams:
-            stream_gui = StreamGUI(lsl_stream, layout)
+            stream = Stream(lsl_stream, main_layout)
             print(f"Connected: {get_lsl_stream_desc(lsl_stream, 0)}")
-            self.stream_guis.append(stream_gui)
+            self.streams.append(stream)
 
         self.setCentralWidget(main_widget)
         self.setup_timers()
 
     def setup_timers(self):
+        self.last_run = local_clock()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
         self.timer.start(REFRESH_EVERY_MS)
     
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            print("Escape key was pressed, reloading.")
+            relaunch_main()
+        else:
+            print(f"Key pressed: {event.text()}")
+    
     def update_plot(self):
         has_data = False
-        for stream_gui in self.stream_guis:
-            for stream_channel_gui in stream_gui.stream_channel_guis:
-                stream_channel_gui.samples = []
-                if not stream_channel_gui.has_srate:
-                    foo = int(FAKE_FS_FOR_EVENTS * REFRESH_EVERY_MS / 1000)
-                    for i in range(foo):
-                        has_data = True
-                        stream_channel_gui.samples.append(0)
+        now = local_clock()
+        elapsed = now - self.last_run
+        self.last_run = now
+
+        for stream in self.streams:
+            for channel in stream.channels:
+                if channel.has_srate:
+                    channel.samples = []
+                else:
+                    has_data = True
+                    fill_size = PSEUDO_SRATE_FOR_EVENTS * elapsed
+                    fill_size = int(round(fill_size))
+                    channel.samples = [0] * fill_size
 
             while True:
-                sample, timestamp = stream_gui.inlet.pull_sample(timeout=0.0) # have a 0.0 timeout to avoid blocking here
+                sample, timestamp = stream.lsl_inlet.pull_sample(timeout=0.0) # have a 0.0 timeout to avoid blocking here
                 if sample:
                     has_data = True
-                    for stream_channel_gui in stream_gui.stream_channel_guis:
-                        if stream_channel_gui.has_srate:
-                            stream_channel_gui.samples.append(sample[stream_channel_gui.channel_id])
+                    for channel in stream.channels:
+                        if channel.has_srate:
+                            channel.samples.append(sample[channel.channel_id])
                         else:
                             now = local_clock()
                             delta_t = now - timestamp
-                            neg_id = int(delta_t * FAKE_FS_FOR_EVENTS)
+                            neg_id = int(delta_t * PSEUDO_SRATE_FOR_EVENTS)
 
-                            stream_channel_gui.samples[-neg_id] = 1
+                            channel.samples[-neg_id] = 1
                             
                 else:
                     #print(f"Nb samples: {len(samples)}")
                     break
 
             if has_data:
-                for stream_channel_gui in stream_gui.stream_channel_guis:
-                    new_data = np.array(stream_channel_gui.samples)
+                for channel in stream.channels:
+                    new_data = np.array(channel.samples)
                     if len(new_data) == 0:
                         continue
 
-                    stream_channel_gui.data_buffer = np.roll(stream_channel_gui.data_buffer, -len(new_data))
-                    stream_channel_gui.data_buffer[-len(new_data):] = new_data
+                    channel.data_buffer = np.roll(channel.data_buffer, -len(new_data))
+                    channel.data_buffer[-len(new_data):] = new_data
 
                     # time series
-                    stream_channel_gui.curve_ts.setData(np.linspace(0, BUFFER_DURATION_MS / 1000, len(stream_channel_gui.data_buffer)), stream_channel_gui.data_buffer)
+                    channel.ui_curve_ts.setData(np.linspace(0, BUFFER_DURATION_MS / 1000, len(channel.data_buffer)), channel.data_buffer)
 
                     # fft
-                    if stream_channel_gui.has_srate:
-                        fft_result = np.fft.rfft(stream_channel_gui.data_buffer)
-                        freqs = np.fft.rfftfreq(len(stream_channel_gui.data_buffer), 1/stream_channel_gui.fs)
+                    if channel.has_srate:
+                        fft_result = np.fft.rfft(channel.data_buffer)
+                        freqs = np.fft.rfftfreq(len(channel.data_buffer), 1/channel.fs)
                         magnitude = np.abs(fft_result)
-                        stream_channel_gui.curve_fft.setData(freqs, magnitude)
-    
-if __name__ == "__main__":
-    app = QApplication([])
-    main = MyWindow()
+                        channel.ui_curve_fft.setData(freqs, magnitude)
+
+main = None
+
+def relaunch_main():
+    global main
+    if main is not None:
+        main.close()
+
+    main = MainWindow()
 
     # Very useful when running in auto-reload
     main.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -194,4 +212,21 @@ if __name__ == "__main__":
     main.move(left, top)
 
     main.show()
+    
+    
+if __name__ == "__main__":
+    app = QApplication([])
+    relaunch_main()
+    #main = MainWindow()
+
+    ## Very useful when running in auto-reload
+    #main.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+    ## position window on right screen
+    #monitors = QScreen.virtualSiblings(main.screen())
+    #left = max([x.availableGeometry().left() for x in monitors])
+    #top = min([x.availableGeometry().top() for x in monitors])
+    #main.move(left, top)
+
+    #main.show()
     app.exec()

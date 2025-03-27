@@ -7,10 +7,10 @@ from pylsl import StreamInfo, StreamOutlet
 stream_name = "RandomDataStream"
 stream_type = "RandomData"
 sampling_rate = 100
-frequencies = [10, 20, 30]
+frequencies = [3, 20, 40]
 num_channels = len(frequencies)
 amplitude = 10
-noise_amplitude = 5
+noise_amplitude = 1
 
 # Create a StreamInfo object to define the stream
 info = StreamInfo(stream_name, stream_type, num_channels, sampling_rate, 'float32', 'myuid1234')
@@ -21,6 +21,7 @@ outlet = StreamOutlet(info)
 # Send random data to the stream
 
 start_time = time.time()
+
 
 try:
     while True:
@@ -37,4 +38,9 @@ try:
 
 except KeyboardInterrupt:
     print("Streaming stopped.")
+
+
+
+
+
 
