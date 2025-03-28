@@ -4,7 +4,7 @@ import os
 import signal
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter, QLabel
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter, QLabel, QTabWidget
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QScreen
 from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
@@ -66,7 +66,7 @@ class StreamChannel():
 
         self.ui_plot_widget_ts.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
         self.ui_plot_widget_ts.setLabel("left", "Amplitude")
-        self.ui_plot_widget_ts.setLabel("bottom", "Time (s)")
+        #self.ui_plot_widget_ts.setLabel("bottom", "Time (s)")
 
         self.ui_plot_widget_fft.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
         self.ui_plot_widget_fft.setLabel("left", "Amplitude")
@@ -91,7 +91,6 @@ class StreamChannel():
         self.ui_splitter.addWidget(self.ui_plot_widget_fft)
 
 
-
 class Stream():
     def __init__(self, lsl_stream: StreamInfo, ui_layout: QVBoxLayout):
         self.channel_count = lsl_stream.channel_count()
@@ -104,13 +103,24 @@ class Stream():
             self.channels.append(channel)
             ui_layout.addWidget(channel.ui_splitter)
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.streams: List[Stream] = []
 
-        main_widget = QWidget(self)
-        main_layout = QVBoxLayout(main_widget)
+        self.tabs = QTabWidget(self)
+
+        tab_signals_widget = QWidget(self)
+        tab_signals_layout = QVBoxLayout(tab_signals_widget)
+        tab_signals_widget.setLayout(tab_signals_layout)
+
+        tab_info_widget = QLabel(self, text="Foo")
+        tab_info_layout = QVBoxLayout(tab_info_widget)
+        tab_info_widget.setLayout(tab_info_layout)
+
+        self.tabs.addTab(tab_signals_widget, "Signals")
+        self.tabs.addTab(tab_info_widget, "Info")
 
         print("Looking for LSL stream...")
         lsl_streams = resolve_streams()
@@ -120,11 +130,11 @@ class MainWindow(QMainWindow):
 
         print(lsl_streams)
         for lsl_stream in lsl_streams:
-            stream = Stream(lsl_stream, main_layout)
+            stream = Stream(lsl_stream, tab_signals_layout)
             print(f"Connected: {get_lsl_stream_desc(lsl_stream, 0)}")
             self.streams.append(stream)
 
-        self.setCentralWidget(main_widget)
+        self.setCentralWidget(self.tabs)
         self.setup_timers()
 
     def setup_timers(self):
@@ -137,6 +147,10 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key.Key_Escape:
             print("Escape key was pressed, reloading.")
             relaunch_main()
+        elif event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key.Key_PageUp:
+            self.tabs.setCurrentIndex(self.tabs.currentIndex() - 1)
+        elif event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key.Key_PageDown:
+            self.tabs.setCurrentIndex(self.tabs.currentIndex() + 1)
         else:
             print(f"Key pressed: {event.text()}")
     
@@ -191,27 +205,29 @@ class MainWindow(QMainWindow):
                         fft_result = np.fft.rfft(channel.data_buffer)
                         freqs = np.fft.rfftfreq(len(channel.data_buffer), 1/channel.fs)
                         magnitude = np.abs(fft_result)
-                        channel.ui_curve_fft.setData(freqs, magnitude)
+                        # don't display index 0 to help visibility
+                        channel.ui_curve_fft.setData(freqs[1:], magnitude[1:])
 
-main = None
+# Set as global so we can relaunch the app from a shortcut
+main_window = None
 
 def relaunch_main():
-    global main
-    if main is not None:
-        main.close()
+    global main_window
+    if main_window is not None:
+        main_window.close()
 
-    main = MainWindow()
+    main_window = MainWindow()
 
     # Very useful when running in auto-reload
-    main.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    main_window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
     # position window on right screen
-    monitors = QScreen.virtualSiblings(main.screen())
+    monitors = QScreen.virtualSiblings(main_window.screen())
     left = max([x.availableGeometry().left() for x in monitors])
     top = min([x.availableGeometry().top() for x in monitors])
-    main.move(left, top)
+    main_window.move(left, top)
 
-    main.show()
+    main_window.showMaximized()
     
     
 if __name__ == "__main__":
