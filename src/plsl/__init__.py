@@ -4,7 +4,7 @@ import os
 import signal
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter, QLabel, QTabWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QSplitter, QLabel, QTabWidget, QPushButton, QFrame
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QScreen
 from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
@@ -16,7 +16,7 @@ from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
 # yes | while read i; do python src/plsl/__init__.py; done
 
 REFRESH_EVERY_MS = 20
-BUFFER_DURATION_MS = 4000
+BUFFER_DURATION_MS = 5000
 PSEUDO_SRATE_FOR_EVENTS = 1000
 
 
@@ -26,6 +26,7 @@ def get_lsl_stream_desc(stream: StreamInfo, channel_id: int):
 class StreamChannel():
     def __init__(self, lsl_stream: StreamInfo, channel_id: int):
         self.channel_id = channel_id
+        self.lsl_stream = lsl_stream
 
 
         # from /usr/include/lsl_cpp.h
@@ -64,11 +65,11 @@ class StreamChannel():
         self.ui_plot_widget_ts = pg.PlotWidget()
         self.ui_plot_widget_fft = pg.PlotWidget()
 
-        self.ui_plot_widget_ts.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
+        #self.ui_plot_widget_ts.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
         self.ui_plot_widget_ts.setLabel("left", "Amplitude")
         #self.ui_plot_widget_ts.setLabel("bottom", "Time (s)")
 
-        self.ui_plot_widget_fft.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
+        #self.ui_plot_widget_fft.setTitle(get_lsl_stream_desc(lsl_stream, channel_id))
         self.ui_plot_widget_fft.setLabel("left", "Amplitude")
         self.ui_plot_widget_fft.setLabel("bottom", "Frequency (Hz)")
 
@@ -89,6 +90,25 @@ class StreamChannel():
         self.ui_splitter = QSplitter(Qt.Horizontal)
         self.ui_splitter.addWidget(self.ui_plot_widget_ts)
         self.ui_splitter.addWidget(self.ui_plot_widget_fft)
+        
+    def add_to_layout(self, layout):
+              # Create the toggle button
+        base_text = get_lsl_stream_desc(self.lsl_stream, self.channel_id)
+        toggle_button = QPushButton(base_text)
+        toggle_button.setStyleSheet("text-align: left; padding-left: 10px; border: none; background-color: #000000; color: #ffffff")
+        
+        # Create the layout
+        layout.addWidget(toggle_button)
+        layout.addWidget(self.ui_splitter)
+    
+        def toggle_content():
+            # Toggle the visibility of the content widget
+            is_visible = self.ui_splitter.isVisible()
+            self.ui_splitter.setVisible(not is_visible)
+            
+        toggle_button.clicked.connect(toggle_content)
+
+
 
 
 class Stream():
@@ -101,7 +121,8 @@ class Stream():
         for i in range(self.channel_count):
             channel = StreamChannel(lsl_stream, i)
             self.channels.append(channel)
-            ui_layout.addWidget(channel.ui_splitter)
+            channel.add_to_layout(ui_layout)
+            #ui_layout.addWidget(channel.ui_splitter)
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +135,8 @@ class MainWindow(QMainWindow):
         tab_signals_widget = QWidget(self)
         tab_signals_layout = QVBoxLayout(tab_signals_widget)
         tab_signals_widget.setLayout(tab_signals_layout)
+        tab_signals_widget.setContentsMargins(0, 0, 0, 0)  # No margins around the layout
+        tab_signals_layout.setSpacing(0)
 
         tab_info_widget = QLabel(self, text="Foo")
         tab_info_layout = QVBoxLayout(tab_info_widget)
