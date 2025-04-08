@@ -22,6 +22,18 @@ muselsl stream --address DEVICE_MAC_ADDRESS --lsltime
 poetry run python src/generate/generate_random_lsl_stream.py
 ```
 
+**MIDI Digital Piano to LSL events**
+
+```
+poetry run python src/generate/midi_recorder_lsl_events.py
+```
+
+**Replay Hexoskin record**
+
+```
+poetry run python src/generate/replay_hexoskin_to_lsl_stream_chunk.py
+```
+
 **Replay NIRS files**
 
 ```
@@ -52,7 +64,7 @@ poetry run python src/generate/serial_listen_lsl_stream_events.py
 ## Launch the GUI
 
 ```
-poetry run python src/plsl/__init__.py
+poetry run python src/plsl/gui.py
 ```
 
 ## Launch with autoreload on save

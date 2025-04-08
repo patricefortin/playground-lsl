@@ -13,15 +13,18 @@ from pylsl import resolve_streams, StreamInlet, StreamInfo, local_clock
 ## In one terminal
 # find src -name "*.py" | entr ./kill.sh
 ## In another terminal
-# yes | while read i; do python src/plsl/__init__.py; done
+# yes | while read i; do python src/plsl/gui.py; done
 
 REFRESH_EVERY_MS = 20
 BUFFER_DURATION_MS = 5000
 PSEUDO_SRATE_FOR_EVENTS = 1000
 
 
-def get_lsl_stream_desc(stream: StreamInfo, channel_id: int):
-    return f"{stream.name()}({stream.hostname()}) [{stream.type()}] channel {channel_id}"
+def get_lsl_stream_desc(stream: StreamInfo, channel_id: int = None):
+    label = f"{stream.name()}({stream.hostname()}) [{stream.type()}]"
+    if channel_id is not None:
+        label += f" channel {channel_id}"
+    return label
 
 class StreamChannel():
     def __init__(self, lsl_stream: StreamInfo, channel_id: int):
@@ -91,11 +94,15 @@ class StreamChannel():
         self.ui_splitter.addWidget(self.ui_plot_widget_ts)
         self.ui_splitter.addWidget(self.ui_plot_widget_fft)
         
+    @property
+    def label(self):
+        return get_lsl_stream_desc(self.lsl_stream, self.channel_id)
+
     def add_to_layout(self, layout):
               # Create the toggle button
         base_text = get_lsl_stream_desc(self.lsl_stream, self.channel_id)
         toggle_button = QPushButton(base_text)
-        toggle_button.setStyleSheet("text-align: left; padding-left: 10px; border: none; background-color: #000000; color: #ffffff")
+        toggle_button.setStyleSheet("text-align: left; padding-left: 20px; border: 5px; border-color: #ffffff; background-color: #000000; color: #ffffff")
         
         # Create the layout
         layout.addWidget(toggle_button)
@@ -107,7 +114,7 @@ class StreamChannel():
             self.ui_splitter.setVisible(not is_visible)
             
         toggle_button.clicked.connect(toggle_content)
-
+    
 
 
 
@@ -124,6 +131,10 @@ class Stream():
             channel.add_to_layout(ui_layout)
             #ui_layout.addWidget(channel.ui_splitter)
 
+    @property
+    def label(self):
+        return get_lsl_stream_desc(self.lsl_stream)
+    
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -135,7 +146,6 @@ class MainWindow(QMainWindow):
         tab_signals_widget = QWidget(self)
         tab_signals_layout = QVBoxLayout(tab_signals_widget)
         tab_signals_widget.setLayout(tab_signals_layout)
-        tab_signals_widget.setContentsMargins(0, 0, 0, 0)  # No margins around the layout
         tab_signals_layout.setSpacing(0)
 
         tab_info_widget = QLabel(self, text="Foo")
@@ -177,6 +187,7 @@ class MainWindow(QMainWindow):
         else:
             print(f"Key pressed: {event.text()}")
     
+
     def update_plot(self):
         has_data = False
         now = local_clock()
@@ -193,43 +204,49 @@ class MainWindow(QMainWindow):
                     fill_size = int(round(fill_size))
                     channel.samples = [0] * fill_size
 
+            # read all there is
             while True:
-                sample, timestamp = stream.lsl_inlet.pull_sample(timeout=0.0) # have a 0.0 timeout to avoid blocking here
-                if sample:
-                    has_data = True
-                    for channel in stream.channels:
-                        if channel.has_srate:
+                #sample, timestamp = stream.lsl_inlet.pull_sample(timeout=0.0) # have a 0.0 timeout to avoid blocking here
+                chunk, timestamps = stream.lsl_inlet.pull_chunk(timeout=0.0) # have a 0.0 timeout to avoid blocking here
+                if len(chunk) == 0:
+                    break # exit while True loop
+
+                #print(f"stream '{stream.label}' len of chunk: {len(chunk)}")
+
+                has_data = True
+                for channel in stream.channels:
+                    if channel.has_srate:
+                        for sample in chunk:
                             channel.samples.append(sample[channel.channel_id])
-                        else:
-                            now = local_clock()
+                    else:
+                        now = local_clock()
+                        for timestamp in timestamps:
                             delta_t = now - timestamp
                             neg_id = int(delta_t * PSEUDO_SRATE_FOR_EVENTS)
 
                             channel.samples[-neg_id] = 1
                             
-                else:
-                    #print(f"Nb samples: {len(samples)}")
-                    break
+            if not has_data:
+                continue # next stream
 
-            if has_data:
-                for channel in stream.channels:
-                    new_data = np.array(channel.samples)
-                    if len(new_data) == 0:
-                        continue
+            for channel in stream.channels:
+                new_data = np.array(channel.samples)
+                if len(new_data) == 0:
+                    continue # next channel
 
-                    channel.data_buffer = np.roll(channel.data_buffer, -len(new_data))
-                    channel.data_buffer[-len(new_data):] = new_data
+                channel.data_buffer = np.roll(channel.data_buffer, -len(new_data))
+                channel.data_buffer[-len(new_data):] = new_data
 
-                    # time series
-                    channel.ui_curve_ts.setData(np.linspace(0, BUFFER_DURATION_MS / 1000, len(channel.data_buffer)), channel.data_buffer)
+                # time series
+                channel.ui_curve_ts.setData(np.linspace(0, BUFFER_DURATION_MS / 1000, len(channel.data_buffer)), channel.data_buffer)
 
-                    # fft
-                    if channel.has_srate:
-                        fft_result = np.fft.rfft(channel.data_buffer)
-                        freqs = np.fft.rfftfreq(len(channel.data_buffer), 1/channel.fs)
-                        magnitude = np.abs(fft_result)
-                        # don't display index 0 to help visibility
-                        channel.ui_curve_fft.setData(freqs[1:], magnitude[1:])
+                # fft
+                if channel.has_srate:
+                    fft_result = np.fft.rfft(channel.data_buffer)
+                    freqs = np.fft.rfftfreq(len(channel.data_buffer), 1/channel.fs)
+                    magnitude = np.abs(fft_result)
+                    # don't display index 0 to help visibility
+                    channel.ui_curve_fft.setData(freqs[1:], magnitude[1:])
 
 # Set as global so we can relaunch the app from a shortcut
 main_window = None
